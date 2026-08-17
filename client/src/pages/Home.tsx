@@ -1,25 +1,160 @@
-import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import { Streamdown } from 'streamdown';
+/** Radar Room design: tactical cartography, Signal Amber accents, evidence-first hierarchy, no simulated match data. */
+import { useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowUpRight,
+  ChevronRight,
+  CircleDot,
+  ClipboardCheck,
+  Crosshair,
+  Database,
+  FileSearch,
+  Layers3,
+  Radar,
+  RefreshCw,
+  UsersRound,
+} from "lucide-react";
 
-/**
- * All content in this page are only for example, replace with your own feature implementation
- * When building pages, remember your instructions in Frontend Best Practices, Design Guide and Common Pitfalls
- */
+type ReportSummary = { id: string; map: string; rounds: number; anomaly_score: number };
+type Evidence = { tick?: number; category?: string; confidence?: number; description?: string };
+type Player = { steam_id: number; name: string; team: string; scores: { overall: number }; evidence: Evidence[]; summary: string };
+type Report = { metadata: { map_name: string; total_rounds: number; duration_seconds: number; tick_rate: number }; players: Player[]; overall_anomaly: number };
+
+const API_URL = (import.meta.env.VITE_SENTINEL_API_URL as string | undefined)?.replace(/\/$/, "") || "http://127.0.0.1:8787";
+const navItems = [
+  [Radar, "Обзор"],
+  [Activity, "Временная шкала"],
+  [FileSearch, "Доказательства"],
+  [UsersRound, "Игроки"],
+  [Database, "Архив"],
+] as const;
+
+function scoreTone(score: number) {
+  if (score >= 0.7) return "critical";
+  if (score >= 0.4) return "watch";
+  return "clear";
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
 export default function Home() {
-  // If theme is switchable in App.tsx, we can implement theme toggling like this:
-  // const { theme, toggleTheme } = useTheme();
+  const [reports, setReports] = useState<ReportSummary[]>([]);
+  const [report, setReport] = useState<Report | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [connection, setConnection] = useState<"loading" | "ready" | "offline">("loading");
+  const [loadingReport, setLoadingReport] = useState(false);
+
+  async function loadReports() {
+    setConnection("loading");
+    try {
+      const response = await fetch(`${API_URL}/v1/reports`);
+      if (!response.ok) throw new Error("report list unavailable");
+      const nextReports = (await response.json()) as ReportSummary[];
+      setReports(nextReports);
+      setConnection("ready");
+      if (nextReports[0] && !selectedId) setSelectedId(nextReports[0].id);
+    } catch {
+      setReports([]);
+      setConnection("offline");
+    }
+  }
+
+  useEffect(() => {
+    void loadReports();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setReport(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingReport(true);
+    fetch(`${API_URL}/v1/reports/${selectedId}`)
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("report unavailable"))))
+      .then((nextReport: Report) => !cancelled && setReport(nextReport))
+      .catch(() => !cancelled && setReport(null))
+      .finally(() => !cancelled && setLoadingReport(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  const players = useMemo(
+    () => [...(report?.players ?? [])].sort((left, right) => right.scores.overall - left.scores.overall),
+    [report],
+  );
+  const evidence = useMemo(() => players.flatMap((player) => player.evidence.map((item) => ({ ...item, player: player.name }))).slice(0, 6), [players]);
+  const activeScore = report?.overall_anomaly ?? 0;
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <main>
-        {/* Example: lucide-react for icons */}
-        <Loader2 className="animate-spin" />
-        Example Page
-        {/* Example: Streamdown for markdown rendering */}
-        <Streamdown>Any **markdown** content</Streamdown>
-        <Button variant="default">Example Button</Button>
-      </main>
-    </div>
+    <main className="radar-shell">
+      <aside className="command-rail">
+        <div className="brand-lockup">
+          <img src="/manus-storage/sentinel-radar-logo_dcde56d8.png" alt="Sentinel" className="brand-mark" />
+          <div><strong>SENTINEL</strong><span>RADAR ROOM</span></div>
+        </div>
+        <nav aria-label="Разделы панели">
+          {navItems.map(([Icon, label], index) => (
+            <button className={`rail-item ${index === 0 ? "is-active" : ""}`} key={label} type="button">
+              <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="rail-footer"><span className="status-dot" data-state={connection} /><span>{connection === "ready" ? "API на связи" : connection === "loading" ? "Проверяем API" : "API недоступен"}</span></div>
+      </aside>
+
+      <section className="analysis-surface">
+        <header className="surface-header">
+          <div><p className="eyebrow">ПОВЕДЕНЧЕСКАЯ АНАЛИТИКА · CS2</p><h1>Карта наблюдений</h1></div>
+          <button type="button" onClick={() => void loadReports()} className="refresh-action"><RefreshCw size={16} /> Синхронизировать</button>
+        </header>
+
+        <section className="hero-command" style={{ backgroundImage: "linear-gradient(90deg, rgba(7,19,19,.96) 0%, rgba(7,19,19,.70) 56%, rgba(7,19,19,.20) 100%), url('/manus-storage/sentinel-command-background_4f088e6f.jpg')" }}>
+          <div className="hero-copy"><p className="eyebrow amber">АКТИВНЫЙ КОНТУР</p><div className="telemetry-line"><span>RPT / {selectedId ?? "PENDING"}</span><span>VERIFY / {report ? "SOURCE-BOUND" : "AWAITING"}</span></div><h2>{report ? report.metadata.map_name.replace("de_", "").toUpperCase() : "Ожидание отчёта"}</h2><p>{report ? `${report.metadata.total_rounds} раундов · ${report.metadata.tick_rate} тик/с · ${Math.round(report.metadata.duration_seconds / 60)} мин анализа` : "Подключите Sentinel API к каталогу JSON-отчётов, чтобы открыть временную шкалу и доказательства."}</p></div>
+          <div className={`radar-score ${scoreTone(activeScore)}`}><span>ОБЩИЙ РИСК</span><strong>{formatPercent(activeScore)}</strong><small>{report ? "на основе отчёта" : "нет данных"}</small></div>
+          <div className="coordinate-stamp">SECTOR / {selectedId ?? "—"}<br />SOURCE / {API_URL.replace(/^https?:\/\//, "")}</div>
+        </section>
+
+        <section className="metric-strip" aria-label="Ключевые показатели">
+          <Metric icon={Layers3} label="Отчётов в архиве" value={String(reports.length).padStart(2, "0")} note="доступно через API" />
+          <Metric icon={UsersRound} label="Игроков в матче" value={String(players.length).padStart(2, "0")} note={report ? "профили загружены" : "ожидается отчёт"} />
+          <Metric icon={ClipboardCheck} label="Сигналов" value={String(evidence.length).padStart(2, "0")} note="событий для проверки" />
+          <Metric icon={Crosshair} label="Состояние контура" value={connection === "ready" ? "LIVE" : "IDLE"} note={connection === "ready" ? "данные доступны" : "локальный режим"} />
+        </section>
+
+        <section className="workspace-grid">
+          <article className="panel dossier-panel">
+            <div className="panel-heading"><div><p className="eyebrow">ДОСЬЕ МАТЧА</p><h3>Профили риска</h3></div><span className="panel-index">SECTOR / 01</span></div>
+            {players.length ? <div className="player-list">{players.map((player, index) => <div className="player-row" key={player.steam_id}><span className="rank">{String(index + 1).padStart(2, "0")}</span><div className="player-name"><strong>{player.name}</strong><small>{player.team} · {player.steam_id}</small></div><div className="score-bar"><i style={{ width: `${Math.min(player.scores.overall * 100, 100)}%` }} /></div><strong className={`risk-value ${scoreTone(player.scores.overall)}`}>{formatPercent(player.scores.overall)}</strong><ChevronRight size={16} /></div>)}</div> : <EmptyState icon={UsersRound} title="Нет профилей для отображения" body="Первая запись появится после загрузки JSON-отчёта из API." />}
+          </article>
+
+          <article className="panel timeline-panel" style={{ backgroundImage: "linear-gradient(180deg, rgba(12,28,28,.88), rgba(12,28,28,.98)), url('/manus-storage/sentinel-route-map_6c357b2d.jpg')" }}>
+            <div className="panel-heading"><div><p className="eyebrow">ВРЕМЕННАЯ ШКАЛА</p><h3>Цепочка доказательств</h3></div><span className="panel-index active-index">SECTOR / 02</span></div>
+            {evidence.length ? <ol className="event-list">{evidence.map((event, index) => <li key={`${event.player}-${event.tick}-${index}`}><span className="event-node" /><div><small>TICK {event.tick ?? "—"} · {event.player}</small><strong>{event.category ?? "Поведенческий сигнал"}</strong><p>{event.description ?? "Детали доступны в исходном отчёте."}</p></div><b>{formatPercent(event.confidence ?? 0)}</b></li>)}</ol> : <EmptyState icon={Activity} title="Временная шкала пуста" body="Сигналы из поля evidence будут выстроены здесь по времени." />}
+          </article>
+
+          <article className="panel archive-panel">
+            <div className="panel-heading"><div><p className="eyebrow">АРХИВ</p><h3>Доступные отчёты</h3></div><span className="panel-index">SECTOR / 03</span></div>
+            {reports.length ? <div className="report-list">{reports.map((item) => <button type="button" onClick={() => setSelectedId(item.id)} className={`report-row ${item.id === selectedId ? "selected" : ""}`} key={item.id}><span><CircleDot size={14} />{item.map}</span><small>{item.rounds} RD</small><strong>{formatPercent(item.anomaly_score)}</strong></button>)}</div> : <EmptyState icon={Database} title={connection === "offline" ? "Нет соединения с API" : "Архив пока пуст"} body={connection === "offline" ? "Запустите sentinel-api и задайте VITE_SENTINEL_API_URL для этой панели." : "Отчёты будут перечислены автоматически."} />}
+          </article>
+
+          <article className="panel field-panel" style={{ backgroundImage: "linear-gradient(90deg, rgba(13,29,28,.92), rgba(13,29,28,.62)), url('/manus-storage/sentinel-evidence-field_b3cb2976.jpg')" }}>
+            <div><p className="eyebrow amber">ПРОТОКОЛ ПРОВЕРКИ</p><h3>Вердикт требует контекста.</h3><p>Sentinel показывает наблюдения и источники, но не заменяет ручную оценку матча.</p></div><div className="field-tag"><AlertTriangle size={15} />{loadingReport ? "Загрузка отчёта" : report ? "Проверить evidence" : "Ожидается источник"}</div><ArrowUpRight className="field-arrow" size={22} />
+          </article>
+        </section>
+      </section>
+    </main>
   );
+}
+
+function Metric({ icon: Icon, label, value, note }: { icon: typeof Activity; label: string; value: string; note: string }) {
+  return <article className="metric"><Icon size={17} /><div><span>{label}</span><strong>{value}</strong><small>{note}</small></div></article>;
+}
+
+function EmptyState({ icon: Icon, title, body }: { icon: typeof Activity; title: string; body: string }) {
+  return <div className="empty-state"><Icon size={23} /><div><strong>{title}</strong><p>{body}</p><small>SOURCE / SENTINEL API · VERIFY / PENDING</small></div></div>;
 }
