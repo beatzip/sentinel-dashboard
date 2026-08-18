@@ -1,6 +1,9 @@
 /** Radar Room design: tactical cartography, Signal Amber accents, evidence-first hierarchy, no simulated match data. */
 // Radar Room: dark tactical cartography with signal amber reserved for verified evidence.
 import { useEffect, useMemo, useState } from "react";
+import { startLogin } from "@/const";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import ReplayViewer from "@/components/ReplayViewer";
 import {
   Activity,
@@ -16,6 +19,7 @@ import {
   Layers3,
   Radar,
   RefreshCw,
+  Sparkles,
   UsersRound,
 } from "lucide-react";
 
@@ -50,6 +54,7 @@ function formatPercent(value: number) {
 }
 
 export default function Home() {
+  const { isAuthenticated } = useAuth();
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -116,6 +121,28 @@ export default function Home() {
   const evidence = useMemo(() => players.flatMap((player) => player.evidence.map((item) => ({ ...item, player: player.name }))).slice(0, 6), [players]);
   const activeScore = report?.overall_anomaly ?? 0;
   const rounds = report?.rounds ?? [];
+  const summaryFacts = useMemo(() => [
+    ...rounds.flatMap((round) => [
+      { id: `round-${round.round_number}`, text: `${round.story?.headline ?? `Round ${round.round_number}`}. ${round.story?.result ?? "Result recorded."}` },
+      ...(round.story?.deaths ?? []).map((death, index) => ({ id: `death-${round.round_number}-${index}`, text: `Tick ${death.tick}: ${death.summary}` })),
+    ]),
+    ...evidence.map((event, index) => ({ id: `evidence-${index}`, text: `Tick ${event.tick ?? "unknown"}: ${event.player} — ${event.category ?? "behavioral signal"}; ${event.description ?? "details recorded"}` })),
+  ].slice(0, 80), [rounds, evidence]);
+  const summaryMutation = trpc.summary.generate.useMutation();
+
+  function requestSummary() {
+    if (!isAuthenticated) {
+      startLogin();
+      return;
+    }
+    if (!report || !selectedId || !summaryFacts.length) return;
+    summaryMutation.mutate({
+      reportId: selectedId,
+      map: report.metadata.map_name,
+      overallRisk: report.overall_anomaly,
+      facts: summaryFacts,
+    });
+  }
 
   return (
     <main className="radar-shell">
@@ -174,6 +201,14 @@ export default function Home() {
 
           <article className="panel field-panel" style={{ backgroundImage: "linear-gradient(90deg, rgba(13,29,28,.92), rgba(13,29,28,.62)), url('/manus-storage/sentinel-evidence-field_b3cb2976.jpg')" }}>
             <div><p className="eyebrow amber">ПРОТОКОЛ ПРОВЕРКИ</p><h3>Вердикт требует контекста.</h3><p>Sentinel показывает наблюдения и источники, но не заменяет ручную оценку матча.</p></div><div className="field-tag"><AlertTriangle size={15} />{loadingReport ? "Загрузка отчёта" : report ? "Проверить evidence" : "Ожидается источник"}</div><ArrowUpRight className="field-arrow" size={22} />
+          </article>
+
+          <article className="panel ai-summary-panel">
+            <div className="panel-heading"><div><p className="eyebrow amber">OPTIONAL AI / FACTS ONLY</p><h3>Структурированная сводка</h3></div><Sparkles size={18} /></div>
+            <p>Генерируется только по привязанным evidence facts. Сводка не меняет verdict и не добавляет непроверенные причины.</p>
+            <button className="summary-action" type="button" disabled={!report || !summaryFacts.length || summaryMutation.isPending} onClick={requestSummary}><Sparkles size={14} />{summaryMutation.isPending ? "Генерация…" : isAuthenticated ? "Сформировать summary" : "Войти для summary"}</button>
+            {summaryMutation.data ? <div className="summary-output"><strong>{summaryMutation.data.overview}</strong><ol>{summaryMutation.data.observations.map((observation) => <li key={`${observation.factId}-${observation.text}`}><span>{observation.factId}</span>{observation.text}</li>)}</ol><small>Ограничения: {summaryMutation.data.limitations}</small></div> : null}
+            {summaryMutation.error ? <p className="summary-error">Summary недоступен. Исходный report и replay остаются доступны.</p> : null}
           </article>
 
           <article className="panel round-story-panel" id="round-story">
