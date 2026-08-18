@@ -1,10 +1,12 @@
 /** Radar Room design: tactical cartography, Signal Amber accents, evidence-first hierarchy, no simulated match data. */
+// Radar Room: dark tactical cartography with signal amber reserved for verified evidence.
 import { useEffect, useMemo, useState } from "react";
 import ReplayViewer from "@/components/ReplayViewer";
 import {
   Activity,
   AlertTriangle,
   ArrowUpRight,
+  BookOpenCheck,
   ChevronRight,
   CircleDot,
   ClipboardCheck,
@@ -20,12 +22,18 @@ import {
 type ReportSummary = { id: string; map: string; rounds: number; anomaly_score: number };
 type Evidence = { tick?: number; category?: string; confidence?: number; description?: string };
 type Player = { steam_id: number; name: string; team: string; scores: { overall: number }; evidence: Evidence[]; summary: string };
-type Report = { metadata: { map_name: string; total_rounds: number; duration_seconds: number; tick_rate: number }; players: Player[]; overall_anomaly: number };
+type DeathExplanation = { tick: number; summary: string; facts: string[] };
+type RoundStory = { headline: string; result: string; deaths: DeathExplanation[] };
+type Round = { round_number: number; t_score: number; ct_score: number; story: RoundStory };
+type Report = { metadata: { map_name: string; total_rounds: number; duration_seconds: number; tick_rate: number }; players: Player[]; overall_anomaly: number; rounds?: Round[] };
+type DossierMatch = { report_id: string; map: string; player: Player; provenance: { engine_version: string; demo_parser_version: string; map_asset_version: string }; reanalysis: { required: boolean; reasons: string[] } };
+type PlayerDossier = { steam_id: number; name: string; matches_observed: number; flagged_matches: number; confidence: { recurrence: number; status: string; level: string }; matches: DossierMatch[] };
 
 const API_URL = (import.meta.env.VITE_SENTINEL_API_URL as string | undefined)?.replace(/\/$/, "") || "http://127.0.0.1:8787";
 const navItems = [
   [Radar, "Обзор", "overview"],
   [Activity, "Повтор", "replay"],
+  [BookOpenCheck, "Раунды", "rounds"],
   [FileSearch, "Доказательства", "evidence"],
   [UsersRound, "Игроки", "players"],
   [Database, "Архив", "archive"],
@@ -47,6 +55,8 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [connection, setConnection] = useState<"loading" | "ready" | "offline">("loading");
   const [loadingReport, setLoadingReport] = useState(false);
+  const [dossier, setDossier] = useState<PlayerDossier | null>(null);
+  const [loadingDossier, setLoadingDossier] = useState(false);
   const [activeView, setActiveView] = useState<"overview" | "replay">("overview");
   const [activeNav, setActiveNav] = useState("overview");
 
@@ -62,6 +72,19 @@ export default function Home() {
     } catch {
       setReports([]);
       setConnection("offline");
+    }
+  }
+
+  async function loadDossier(steamId: number) {
+    setLoadingDossier(true);
+    try {
+      const response = await fetch(`${API_URL}/v1/players/${steamId}/dossier`);
+      if (!response.ok) throw new Error("dossier unavailable");
+      setDossier((await response.json()) as PlayerDossier);
+    } catch {
+      setDossier(null);
+    } finally {
+      setLoadingDossier(false);
     }
   }
 
@@ -92,6 +115,7 @@ export default function Home() {
   );
   const evidence = useMemo(() => players.flatMap((player) => player.evidence.map((item) => ({ ...item, player: player.name }))).slice(0, 6), [players]);
   const activeScore = report?.overall_anomaly ?? 0;
+  const rounds = report?.rounds ?? [];
 
   return (
     <main className="radar-shell">
@@ -102,7 +126,7 @@ export default function Home() {
         </div>
         <nav aria-label="Разделы панели">
           {navItems.map(([Icon, label, target]) => (
-            <button className={`rail-item ${activeNav === target ? "is-active" : ""}`} key={label} type="button" onClick={() => { setActiveNav(target); setActiveView(target === "replay" ? "replay" : "overview"); const section = target === "evidence" ? "evidence-rail" : target === "players" ? "dossier" : target === "archive" ? "archive" : null; if (section) window.requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView({ behavior: "smooth", block: "center" })); }}>
+            <button className={`rail-item ${activeNav === target ? "is-active" : ""}`} key={label} type="button" onClick={() => { setActiveNav(target); setActiveView(target === "replay" ? "replay" : "overview"); const section = target === "evidence" ? "evidence-rail" : target === "players" ? "dossier" : target === "archive" ? "archive" : target === "rounds" ? "round-story" : null; if (section) window.requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView({ behavior: "smooth", block: "center" })); }}>
               <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
             </button>
           ))}
@@ -134,7 +158,8 @@ export default function Home() {
         <section className="workspace-grid">
           <article className="panel dossier-panel" id="dossier">
             <div className="panel-heading"><div><p className="eyebrow">ДОСЬЕ МАТЧА</p><h3>Профили риска</h3></div><span className="panel-index">SECTOR / 01</span></div>
-            {players.length ? <div className="player-list">{players.map((player, index) => <div className="player-row" key={player.steam_id}><span className="rank">{String(index + 1).padStart(2, "0")}</span><div className="player-name"><strong>{player.name}</strong><small>{player.team} · {player.steam_id}</small></div><div className="score-bar"><i style={{ width: `${Math.min(player.scores.overall * 100, 100)}%` }} /></div><strong className={`risk-value ${scoreTone(player.scores.overall)}`}>{formatPercent(player.scores.overall)}</strong><ChevronRight size={16} /></div>)}</div> : <EmptyState icon={UsersRound} title="Нет профилей для отображения" body="Первая запись появится после загрузки JSON-отчёта из API." />}
+            {players.length ? <div className="player-list">{players.map((player, index) => <button className="player-row" type="button" onClick={() => void loadDossier(player.steam_id)} key={player.steam_id}><span className="rank">{String(index + 1).padStart(2, "0")}</span><div className="player-name"><strong>{player.name}</strong><small>{player.team} · {player.steam_id}</small></div><div className="score-bar"><i style={{ width: `${Math.min(player.scores.overall * 100, 100)}%` }} /></div><strong className={`risk-value ${scoreTone(player.scores.overall)}`}>{formatPercent(player.scores.overall)}</strong><ChevronRight size={16} /></button>)}</div> : <EmptyState icon={UsersRound} title="Нет профилей для отображения" body="Первая запись появится после загрузки JSON-отчёта из API." />}
+            {loadingDossier ? <p className="dossier-status">Загрузка local dossier…</p> : dossier ? <section className="local-dossier"><header><div><p className="eyebrow amber">LOCAL DOSSIER / {dossier.steam_id}</p><h4>{dossier.name}</h4></div><strong>{dossier.confidence.status}</strong></header><div className="dossier-metrics"><span><small>МАТЧЕЙ</small><b>{dossier.matches_observed}</b></span><span><small>ПОВТОРЯЕМОСТЬ</small><b>{formatPercent(dossier.confidence.recurrence)}</b></span><span><small>FLAGGED</small><b>{dossier.flagged_matches}</b></span></div><ol>{dossier.matches.map((match) => <li key={match.report_id}><div><strong>{match.map}</strong><small>RPT / {match.report_id}</small></div><b className={scoreTone(match.player.scores.overall)}>{formatPercent(match.player.scores.overall)}</b><span>{match.reanalysis.required ? `REANALYZE / ${match.reanalysis.reasons.join(", ")}` : `ENGINE / ${match.provenance.engine_version || "recorded"}`}</span></li>)}</ol><p>Источник: только локально опубликованные Sentinel reports; внешние профили и reputation signals не используются.</p></section> : null}
           </article>
 
           <article className="panel timeline-panel" id="evidence-rail" style={{ backgroundImage: "linear-gradient(180deg, rgba(12,28,28,.88), rgba(12,28,28,.98)), url('/manus-storage/sentinel-route-map_6c357b2d.jpg')" }}>
@@ -149,6 +174,11 @@ export default function Home() {
 
           <article className="panel field-panel" style={{ backgroundImage: "linear-gradient(90deg, rgba(13,29,28,.92), rgba(13,29,28,.62)), url('/manus-storage/sentinel-evidence-field_b3cb2976.jpg')" }}>
             <div><p className="eyebrow amber">ПРОТОКОЛ ПРОВЕРКИ</p><h3>Вердикт требует контекста.</h3><p>Sentinel показывает наблюдения и источники, но не заменяет ручную оценку матча.</p></div><div className="field-tag"><AlertTriangle size={15} />{loadingReport ? "Загрузка отчёта" : report ? "Проверить evidence" : "Ожидается источник"}</div><ArrowUpRight className="field-arrow" size={22} />
+          </article>
+
+          <article className="panel round-story-panel" id="round-story">
+            <div className="panel-heading"><div><p className="eyebrow amber">ROUND STORY</p><h3>Фактическая история раундов</h3></div><span className="panel-index">SECTOR / 04</span></div>
+            {rounds.length ? <div className="round-story-list">{rounds.map((round) => <section className="round-entry" key={round.round_number}><header><span>RD {String(round.round_number).padStart(2, "0")}</span><strong>{round.story?.headline ?? `Раунд ${round.round_number}`}</strong><small>{round.story?.result ?? `${round.t_score}–${round.ct_score}`}</small></header>{round.story?.deaths?.length ? <ol>{round.story.deaths.map((death) => <li key={`${round.round_number}-${death.tick}-${death.summary}`}><time>TICK {death.tick}</time><p>{death.summary}</p>{death.facts.length ? <div>{death.facts.map((fact) => <span key={fact}>{fact.replaceAll("_", " ")}</span>)}</div> : null}</li>)}</ol> : <p className="round-empty">В этом раунде нет roster-resolved deaths.</p>}</section>)}</div> : <EmptyState icon={BookOpenCheck} title="Round Story ожидает отчёт" body="Появится после анализа демо, содержащего round context и roster kill feed." />}
           </article>
         </section>
         </>}
