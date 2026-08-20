@@ -8,3 +8,7 @@
 - [x] Add a read-only player filter for real replay frames and approximate geometry.
 - [x] Add a tick inspector that exposes frame, crouch and provenance without evidence actions.
 - [x] Validate the real demo 3 replay in the viewer, then run Vitest, TypeScript and production build.
+- [x] Add player-list search and quick selection without modifying replay data or evidence state.
+- [x] Add an observed-crouch frame indicator and next/previous crouch navigation for the selected player.
+- [x] Add read-only capsule hover details from `approximate_spatial` with provenance and geometry fields.
+- [x] Validate the new functional-only controls on real demo 3, then run Vitest, TypeScript and production build.
